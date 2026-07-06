@@ -1,0 +1,48 @@
+# KineDrive Stage 2: Imitation Learning (Flow Matching)
+# Trains the Kinematic Flow Matching Action Head on 4D waypoints
+#
+# VLM backbone is frozen (loaded from Stage 1 SFT checkpoint).
+# Only action_head and spatial_pe are trained.
+#
+# Flow matching in 4D (x,y,θ,v) space:
+#   x_t = (1-t) * x_0 + t * ε    (data → noise interpolation)
+#   loss = MSE(DiT(x_t, t, ctx), ε - x_0)  +  λ * kinematic_consistency
+
+model:
+  pretrained_model_path: "Qwen/Qwen2.5-VL-3B-Instruct"
+  sft_checkpoint: ./checkpoints/kinedrive_sft/best.pt
+  action_dim: 4                # (x, y, θ, v) — NOVEL
+  num_waypoints: 8
+  waypoint_interval: 0.5
+  dit_num_layers: 12
+  dit_num_heads: 8
+  dit_head_dim: 64
+  ego_status_dim: 9
+  num_denoising_steps: 10      # Euler steps at inference
+
+data:
+  train:
+    data_root: /data/nuscenes/kinedrive_train_json
+    sensor_root: /data/nuscenes/sensor_blobs
+  val:
+    data_root: /data/nuscenes/kinedrive_val_json
+    sensor_root: /data/nuscenes/sensor_blobs
+
+training:
+  # Following ReCogDrive IL stage
+  epochs: 100
+  batch_size: 16
+  num_workers: 8
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  lr_schedule: cosine
+  lr_min: 1.0e-6
+  grad_clip: 1.0
+  precision: bf16
+  devices: 8
+  save_every: 5
+  output_dir: ./checkpoints/kinedrive_il
+
+  # Loss weights
+  loss_flow_weight: 1.0
+  loss_kin_weight: 0.1         # kinematic consistency (novel)

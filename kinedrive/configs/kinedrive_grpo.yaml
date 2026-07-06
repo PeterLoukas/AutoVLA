@@ -1,0 +1,39 @@
+# KineDrive Stage 3: K-GRPO (Kinematic GRPO)
+# RL fine-tuning with PDM-V reward
+#
+# Novel reward: PDM-V = PDM_score × scale + λ_v × Speed_Profile_Score
+#   Speed_Profile_Score = exp(-MAE(v_pred, v_GT))
+#
+# DiffGRPO-style:
+#   G=8 rollouts, γ=0.6 temporal discount, BC from frozen IL policy
+
+model:
+  pretrained_model_path: "Qwen/Qwen2.5-VL-3B-Instruct"
+  il_checkpoint: ./checkpoints/kinedrive_il/best.pt
+  action_dim: 4
+  num_waypoints: 8
+  num_denoising_steps: 5       # fewer steps for GRPO rollouts (speed)
+
+data:
+  train:
+    data_root: /data/nuscenes/kinedrive_train_json
+    sensor_root: /data/nuscenes/sensor_blobs
+  metric_cache: /data/navsim/metric_cache   # NAVSIM pre-computed cache
+
+training:
+  epochs: 10
+  batch_size: 4                # halved vs IL due to G=8 rollouts
+  num_workers: 4
+  learning_rate: 1.0e-5
+  devices: 8
+  save_every: 1
+  output_dir: ./checkpoints/kinedrive_grpo
+
+rl:
+  num_rollouts: 8              # G: rollouts per scene
+  kl_beta: 0.04               # KL divergence penalty
+  reward_scale: 10.0
+  speed_reward_lambda: 2.0    # weight for Speed Profile Score (novel)
+  gamma: 0.6                  # denoising step temporal discount
+  cot_penalty_weight: 0.3     # penalize excessively long CoT
+  cot_penalty_center: 400     # tokens; no penalty if CoT < 400 tokens

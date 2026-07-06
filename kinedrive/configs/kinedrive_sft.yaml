@@ -1,0 +1,76 @@
+# KineDrive Stage 1: Supervised Fine-Tuning
+# CoT + 4D trajectory text supervision
+#
+# Trains Qwen2.5-VL-3B (LoRA) to generate structured reasoning chains
+# followed by 4D kinematic waypoint text: [(x,y,θ,v), ...]
+#
+# Builds on AutoVLA's SFT recipe but extends to 4D output format.
+
+model:
+  pretrained_model_path: "Qwen/Qwen2.5-VL-3B-Instruct"
+  vlm_hidden_dim: 2048
+  freeze_vision_tower: true
+  train_mode: "sft"
+
+  # LoRA — same rank as UniDriveVLA (r=64) for strong adaptation
+  lora_rank: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  lora_target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+  # 3D PE configuration (from SpaceDrive)
+  num_cameras: 6                # nuScenes: 6 surround cameras
+  num_temporal_frames: 4        # 4 frames at 2Hz = 2s history
+  token_stride: 14              # Qwen2.5-VL visual token stride
+  use_midas_depth: false        # Use geometric fallback (no MiDaS required)
+  pe_scaling: 0.1
+  learnable_pe_scaling: true
+
+  # Action head (used for IL/GRPO, not directly in SFT)
+  action_dim: 4                 # (x, y, θ, v) — novel 4D output
+  num_waypoints: 8              # 8 waypoints × 0.5s = 4s horizon
+  waypoint_interval: 0.5
+  ego_status_dim: 9             # [cmd(3), vx, vy, ax, ay, ω, v]
+
+data:
+  train:
+    - data_root: /data/nuscenes/kinedrive_train_json
+      sensor_root: /data/nuscenes/sensor_blobs
+  val:
+    - data_root: /data/nuscenes/kinedrive_val_json
+      sensor_root: /data/nuscenes/sensor_blobs
+  cot_path: /data/nuscenes/kinedrive_cot_annotations.json
+  image_size: [480, 640]
+
+training:
+  # Matches AutoVLA's SFT setup for comparability
+  batch_size: 1
+  gradient_accumulation_steps: 8   # effective batch = 8 per GPU
+  num_workers: 8
+  learning_rate: 2.0e-5
+  weight_decay: 0.01
+  lr_warmup_steps: 500
+  epochs: 5
+  grad_clip: 1.0
+
+  # Infrastructure
+  precision: bf16
+  strategy: fsdp                 # Full Shard for 3B model on 8×A100 40GB
+  devices: 8
+  fsdp_wrap_policy: "Qwen2_5_VLDecoderLayer"
+
+  # Logging
+  log_every: 50
+  save_every: 1
+  output_dir: ./checkpoints/kinedrive_sft
+
+  # CoT loss weighting (from AutoVLA)
+  cot_upweight: 10              # multiply loss for CoT samples by 10×
+                                # (AutoVLA uses 40×, we use 10× for stability)
