@@ -82,21 +82,19 @@ dir .\dataset\nuscenes\v1.0-mini  # expect: category.json, sample.json, scene.js
 pip install -e . --no-deps
 ```
 
-### 3b. Core ML deps that are safe with torch 2.11 (no torch pin)
+### 3b. Core ML deps that are safe with torch 2.11 (no torch pin) — single line
 ```powershell
-pip install "transformers==4.49.0" "qwen-vl-utils==0.0.10" peft accelerate ^
-            "pytorch-lightning>=2.3" torchmetrics tensorboard prettytable einops ^
-            sentencepiece safetensors
+pip install "transformers==4.49.0" "qwen-vl-utils==0.0.10" peft accelerate "pytorch-lightning>=2.3" torchmetrics tensorboard prettytable einops sentencepiece safetensors
 ```
 > We use `pytorch-lightning>=2.3` (not the repo's 2.2.1) because 2.2.1 predates torch 2.11.
 > The LoRA trainer only uses stable Lightning APIs, so a newer version is fine.
 
-### 3c. The nuPlan/navsim geo stack via conda-forge (ships GDAL; avoids Windows pip pain)
+### 3c. The nuPlan/navsim geo stack via conda-forge (ships GDAL; avoids Windows pip pain) — single line
 ```powershell
-conda install -c conda-forge geopandas fiona rasterio shapely rtree pyproj ^
-              casadi control bokeh=2.4.3 hydra-core=1.2.0 omegaconf ray-default ^
-              pyquaternion pyarrow joblib retry ujson nest-asyncio -y
+conda install -c conda-forge geopandas fiona rasterio shapely rtree pyproj hydra-core=1.2.0 omegaconf pyquaternion pyarrow joblib retry ujson nest-asyncio -y
 ```
+> Note: `casadi`, `control`, `bokeh`, `ray` are only needed for nuPlan *simulation/PDMS*, not the
+> nuScenes import path. We leave them out for now and add on demand if the GATE-3e smoke test asks.
 
 ### 3d. Install nuplan-devkit and navsim WITHOUT letting pip change torch/numpy
 ```powershell
