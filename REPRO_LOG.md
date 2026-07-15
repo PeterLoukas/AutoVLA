@@ -251,6 +251,38 @@ v1.0-trainval`, set `train_sample_size: null` (already), and launch `bash script
 
 ---
 
+## 8. Actual working environment on the RTX 5090 desktop (2026-07-15)
+The repo's pinned `requirements.txt` (torch 2.4.0, numpy 1.23.4, py3.9) is **incompatible with
+the RTX 5090 (Blackwell/sm_120)**, which needs torch ≥2.7 + CUDA 12.8. What actually works,
+installed into the existing `qwen_finetune` conda env (Python 3.10):
+
+- **torch 2.11.0+cu128 / torchvision 0.26.0+cu128** (kept; `cuda.get_device_capability()==(12,0)`) ✅
+- transformers 4.49.0, tokenizers 0.21.4, peft 0.19.1, accelerate 1.14.0
+- **pytorch-lightning 2.6.5** (not the repo's 2.2.1 — 2.2.1 predates torch 2.11)
+- qwen-vl-utils 0.0.10, safetensors, sentencepiece, einops, torchmetrics, tensorboard
+- geo stack via **conda-forge** (libmamba solver): geopandas, fiona, rasterio, shapely, rtree, pyproj
+- pure-python via pip: hydra-core 1.2.0, omegaconf, pyquaternion, pyarrow, ujson, nest-asyncio, retry
+- **nuplan-devkit 1.2.0** installed **editable from a local git clone** (`pip install -e . --no-deps
+  --no-build-isolation`) — the PyPI/wheel build fails on Windows with a `build\lib\docs` collision.
+- navsim 1.1.0 editable (`pip install -e .\navsim --no-deps`)
+- Import-chain fills needed by nuplan on Windows: **fcntl shim** (`tools/windows_shims/fcntl.py` →
+  site-packages), aioboto3/aiobotocore/boto3/botocore/s3transfer, pytest, opencv-python,
+  positional-encodings.
+
+Install strategy: **never `pip install -r requirements.txt`** (it would downgrade torch and break
+the GPU). Install `-e . --no-deps`, then curated deps that don't pin torch/numpy. The giant pip
+"dependency conflicts" wall about `autovla requires torch==2.4.0 ...` is expected and harmless.
+
+Import smoke test passing (the GATE-3 gate):
+```
+python -c "import sys; sys.path.insert(0,'navsim'); from dataset_utils.sft_dataset import SFTDataset; from models.autovla import SFTAutoVLA; from navsim.agents.autovla_agent import AutoVLAAgent; print('IMPORTS OK')"
+# -> IMPORTS OK
+```
+
+**Platform caveat:** these Windows shims cover the nuScenes **open-loop** path (L2 + collision).
+The nuPlan **closed-loop PDMS** path needs real nuplan map/sim code and effectively requires
+**Linux/WSL2**; plan to move there for the PDMS phase.
+
 ## Command / run journal
 (Every command executed on the desktop, with output, VRAM, and wall-clock, gets appended
 below as the reproduction proceeds.)
