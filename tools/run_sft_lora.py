@@ -107,7 +107,8 @@ if __name__ == "__main__":
     lora_conf = config['model'].get('lora', {})
     assert lora_conf.get('use', False), "This script expects model.lora.use: true in the config"
     modules_to_save = derive_modules_to_save(model.autovla.vlm, lora_conf.get('modules_to_save'))
-    lora_config = LoraConfig(
+    tied = bool(getattr(model.autovla.vlm.config, "tie_word_embeddings", False))
+    lora_kwargs = dict(
         task_type=TaskType[lora_conf.get("task_type", "CAUSAL_LM")],
         target_modules=lora_conf.get("target_modules", ["q_proj", "v_proj", "k_proj", "o_proj"]),
         r=lora_conf.get("r", 16),
@@ -116,8 +117,15 @@ if __name__ == "__main__":
         bias=lora_conf.get("bias", "none"),
         modules_to_save=modules_to_save,
     )
-    print(f"LoRA target_modules={lora_config.target_modules}, modules_to_save={modules_to_save} "
-          f"(tie_word_embeddings={getattr(model.autovla.vlm.config, 'tie_word_embeddings', None)})")
+    # For tied embeddings, keep embed_tokens and lm_head tied while training the new
+    # <action_*> token rows, so the model can both read AND emit them. Without this, a
+    # modules_to_save=['embed_tokens'] on a tied model leaves lm_head frozen.
+    if tied:
+        lora_kwargs["ensure_weight_tying"] = True
+    lora_config = LoraConfig(**lora_kwargs)
+    print(f"LoRA target_modules={lora_config.target_modules}, modules_to_save={modules_to_save}, "
+          f"ensure_weight_tying={lora_kwargs.get('ensure_weight_tying', False)} "
+          f"(tie_word_embeddings={tied})")
     model.autovla.vlm = get_peft_model(model.autovla.vlm, lora_config)
     model.autovla.vlm.print_trainable_parameters()
 

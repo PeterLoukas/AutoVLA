@@ -54,7 +54,8 @@ def main():
     model = SFTAutoVLA(config)
     lora_conf = config['model'].get('lora', {})
     modules_to_save = derive_modules_to_save(model.autovla.vlm, lora_conf.get('modules_to_save'))
-    lora_config = LoraConfig(
+    tied = bool(getattr(model.autovla.vlm.config, "tie_word_embeddings", False))
+    lora_kwargs = dict(
         task_type=TaskType[lora_conf.get("task_type", "CAUSAL_LM")],
         target_modules=lora_conf.get("target_modules", ["q_proj", "v_proj", "k_proj", "o_proj"]),
         r=lora_conf.get("r", 16),
@@ -63,6 +64,9 @@ def main():
         bias=lora_conf.get("bias", "none"),
         modules_to_save=modules_to_save,
     )
+    if tied:
+        lora_kwargs["ensure_weight_tying"] = True
+    lora_config = LoraConfig(**lora_kwargs)
     model.autovla.vlm = get_peft_model(model.autovla.vlm, lora_config)
 
     print(f"Loading adapter checkpoint: {args.adapter_ckpt}")

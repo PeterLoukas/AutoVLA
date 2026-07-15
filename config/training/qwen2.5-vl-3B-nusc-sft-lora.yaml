@@ -13,7 +13,12 @@ model:
   use_cot: false
   pretrained_model_path: ./Qwen2.5-VL-3B-Instruct
   train_vision_backbone: false
-  train_lm_backbone: false          # LoRA does the LM adaptation; base LM stays frozen
+  # NOTE: train_lm_backbone MUST be true for the LoRA path. It does NOT mean "train the
+  # full backbone" here -- it only disables the legacy manual-freeze in
+  # SFTAutoVLA.configure_optimizers, which would otherwise freeze vlm.model and take the
+  # LoRA adapters (nested inside it) down with it. PEFT governs trainability: base frozen,
+  # LoRA adapters + tied token embeddings trainable.
+  train_lm_backbone: true
   codebook_cache_path: "codebook_cache/agent_vocab.pkl"
 
   # LoRA (single-GPU adaptation of the paper's full-parameter SFT).
