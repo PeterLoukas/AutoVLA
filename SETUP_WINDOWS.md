@@ -111,6 +111,22 @@ python -c "import sys; sys.path.insert(0,'navsim'); from dataset_utils.sft_datas
 fall back to `pip install X --no-deps`), re-run, repeat. Paste the first traceback if you get
 stuck — this is the expected iteration point, and I'll give you the exact fix per module.
 
+**Windows-only stdlib shims.** nuplan-devkit imports Unix-only stdlib modules (starting with
+`fcntl`) that don't exist on Windows. The nuScenes path never uses them at runtime, so we drop
+no-op shims into the env's site-packages. `fcntl` is provided in `tools/windows_shims/fcntl.py`;
+install it with:
+```powershell
+$sp = python -c "import site; print(site.getsitepackages()[-1])"
+Copy-Item .\tools\windows_shims\fcntl.py (Join-Path $sp 'fcntl.py')
+```
+If later imports fail on `resource`, `pwd`, or `grp`, tell me and I'll add matching shims.
+
+> **Platform caveat (important for scope):** these shims are enough for the **nuScenes
+> open-loop** metrics (L2 + collision), which never run nuplan simulation. The **nuPlan
+> closed-loop PDMS** path (the paper's headline metric) needs real nuplan-devkit map/sim code
+> and effectively requires **Linux or WSL2** — it will not run natively on Windows. Plan to move
+> to WSL2 if/when you scale beyond nuScenes.
+
 ---
 
 ## GATE 4 — Download the pretrained model (~7 GB)
