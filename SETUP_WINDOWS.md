@@ -33,11 +33,19 @@ the output; we fix torch before anything else.
 
 ## GATE 1 — Get the code into your workspace
 ```powershell
+# If `git` is not recognized, install it into the env first:
+conda install -c conda-forge git -y
+git --version
+
 cd C:\Users\user\projects\qwen_architecture
 git clone -b claude/e2e-vlm-autonomous-driving-fn7f8m https://github.com/PeterLoukas/AutoVLA.git
 cd AutoVLA
 git log --oneline -3
 ```
+> Create the GATE 2 junction only AFTER the repo is cloned, from INSIDE `AutoVLA`. To remove a
+> junction safely use `cmd /c "rmdir <path>"` — that deletes only the link, never the target data.
+> (Never `Remove-Item -Recurse` a folder that still contains a junction — it can follow the link
+> into your real data.)
 **Pass if:** you see the commits including `Add single-GPU LoRA SFT path for nuScenes reproduction`.
 Your layout is now:
 ```
