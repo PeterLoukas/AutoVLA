@@ -116,7 +116,7 @@ scope for a first pass. See §4 for the memory blocker that must be resolved fir
 
 ---
 
-## 4. Open blocker — single-GPU SFT does not fit as written
+## 4. Blocker resolved — single-GPU SFT via LoRA
 `config/training/*-sft.yaml` sets `train_lm_backbone: true` (full-parameter SFT) and
 `run_sft.py` uses FSDP `FULL_SHARD` with `cpu_offload=False`. On a **single** GPU,
 FULL_SHARD shards across 1 device → no memory saving. Full-parameter AdamW on the 3B model:
@@ -129,12 +129,125 @@ adam m + v    8B × 3B = 24 GB
 --------------------------------  ≈ 48 GB  +  activations  →  OOM on 32 GB
 ```
 
-Resolution options (decision needed from user before writing the SFT config):
-1. **LoRA SFT** — smallest footprint, fits easily; requires adding a LoRA wrap to the SFT
-   path (RFT already uses LoRA, so the pattern exists in-repo). Fastest to green.
-2. **FSDP `cpu_offload=True`** — keeps full-parameter fidelity to the paper; offloads to the
-   64 GB DDR5 host RAM; much slower per step but truest reproduction.
-3. **QLoRA (4-bit base)** — lowest VRAM, but adds bitsandbytes and deviates more from paper.
+**Decision (user-approved): LoRA SFT.** Added a single-GPU LoRA path that keeps the model,
+data, action codebook, prompts, and loss identical to the paper's SFT, but trains a LoRA
+adapter (q/k/v/o) instead of the full backbone. New files:
+
+| File | Purpose |
+|---|---|
+| `config/training/qwen2.5-vl-3B-nusc-sft-lora.yaml` | nuScenes-only, action-only (no-CoT) LoRA SFT config |
+| `tools/run_sft_lora.py` | single-GPU (no FSDP) LoRA trainer with smoke-test CLI overrides |
+| `tools/merge_lora.py` | merges the adapter into base weights → eval-ready checkpoint |
+| `scripts/run_sft_lora.sh` | launcher (`smoke` arg for the mini smoke test) |
+
+**Critical correctness detail:** a pure attention-only LoRA would leave the 2048 newly
+added `<action_*>` token embeddings at random init (they're never in the LoRA target set),
+so the model could never emit meaningful actions. `run_sft_lora.py` therefore keeps the
+token embedding / lm_head trainable via PEFT `modules_to_save`, auto-deriving the exact set
+from `tie_word_embeddings` (tied → `["embed_tokens"]`; untied → `["embed_tokens","lm_head"]`)
+to avoid accidentally untying them.
+
+---
+
+## 5. Desktop runbook (RTX 5090) — nuScenes path
+
+Run all of this in the `qwen_finetune` conda env on the desktop, from the `AutoVLA` repo root.
+You have **nuScenes-mini** already, so start with the smoke test; download `v1.0-trainval`
+only after the mini pipeline is green.
+
+### 5.1 One-time setup
+```bash
+conda env create -f environment.yml          # creates env "autovla_codeclean" (py3.9)
+conda activate autovla_codeclean
+pip install -e . --no-warn-conflicts
+bash install.sh                              # flash-attn etc. (optional on Windows)
+cd navsim && pip install -e . --no-warn-conflicts && cd ..
+# LoRA path needs peft (already in requirements via `peft`). Confirm: python -c "import peft"
+```
+
+### 5.2 Step 1 — pretrained model
+```bash
+bash scripts/download_qwen.sh                # -> ./Qwen2.5-VL-3B-Instruct  (~7 GB)
+```
+
+### 5.3 Step 3 — preprocess nuScenes-MINI (separate env for nuscenes-devkit)
+```bash
+conda env create -f environment_nusc_preprocess.yml && conda activate autovla_nusc_preprocess
+# NOTE: --output_dir ...\nuscenes  ->  produces  ...\nuscenes_train  and  ...\nuscenes_val
+#       which is what config/training/qwen2.5-vl-3B-nusc-sft-lora.yaml points at.
+bash scripts/run_nuscenes_preprocessing.sh \
+    --nuscenes_path ./dataset/nuscenes \
+    --output_dir ./dataset/nuscenes/nuscenes \
+    --version v1.0-mini
+conda activate autovla_codeclean
+# Verify: ls ./dataset/nuscenes/nuscenes_train/*.json | wc -l   (expect ~8 scenes' worth)
+```
+
+### 5.4 Step 4 — action codebook
+Already shipped: `codebook_cache/agent_vocab.pkl` (1.18 MB). No action needed.
+
+### 5.5 Step 5 — LoRA SFT smoke test, then full
+```bash
+# Smoke test: 8 scenes, 1 epoch, 2 val batches. Goal = pipeline runs, VRAM fits, loss drops.
+bash scripts/run_sft_lora.sh smoke
+#   -> checkpoints in runs/sft_lora/<timestamp>/
+
+# Full mini run (all mini_train scenes, 5 epochs):
+bash scripts/run_sft_lora.sh
+
+# Windows PowerShell equivalent (if not using Git Bash):
+#   python tools\run_sft_lora.py --config training/qwen2.5-vl-3B-nusc-sft-lora `
+#       --train_sample_size 8 --epochs 1 --limit_val_batches 2
+```
+Watch: `nvidia-smi` VRAM (expect << 32 GB with LoRA + grad checkpointing), and that
+`print_trainable_parameters()` shows LoRA + embed/lm_head trainable (NOT the whole 3B).
+
+### 5.6 Merge adapter → eval-ready checkpoint
+```bash
+python tools/merge_lora.py \
+    --config config/training/qwen2.5-vl-3B-nusc-sft-lora.yaml \
+    --adapter_ckpt runs/sft_lora/<timestamp>/epoch=..-loss=...ckpt \
+    --out checkpoints/nusc_sft_lora_merged.ckpt
+```
+
+### 5.7 Step 7 — nuScenes eval (L2 + collision)
+Download the UniAD-style segmentation `.pt` files first (link in README §nuScenes Evaluation),
+then:
+```bash
+python tools/eval/nusc_eval.py \
+    --config config/eval/qwen2.5-vl-3B-nusc-sft-eval.yaml \
+    --checkpoint checkpoints/nusc_sft_lora_merged.ckpt \
+    --seg_data_path /path/to/nusc_eval_seg \
+    --output outputs/planning_table_mini.txt
+```
+> Note: the eval config's `data.val.sensor_data_path` should be `null` for nuScenes (JSONs
+> hold absolute image paths). If you hit "file not found" on images, set it to `null`.
+
+### 5.8 Step 8 — sanity vs released checkpoint
+Run 5.7 with `--checkpoint <Zewei-Zhou/AutoVLA merged ckpt>` to confirm the harness reproduces
+the paper's numbers before trusting your own. Fill both rows into the table in §7.
+
+### 5.9 Scale up
+Once mini is green end-to-end: download `v1.0-trainval`, re-run 5.3 with `--version
+v1.0-trainval`, set `train_sample_size: null` (already), and launch `bash scripts/run_sft_lora.sh`.
+
+---
+
+## 6. Deviations from the paper (running list)
+1. **LoRA SFT instead of full-parameter SFT** — hardware (single 32 GB GPU). Same data, loss,
+   codebook, prompts, targets. Token embeddings/lm_head kept trainable so action tokens learn.
+   Expect metrics somewhat below full-parameter SFT; quantify against the released checkpoint.
+2. **Base model 3B, not 7B** — per the repo's own scripts (paper headline uses 7B).
+3. **nuScenes-only, no-CoT** for the first pass — nuPlan/PDMS + CoT are the heavier follow-ups.
+4. **No FSDP** — single-device Lightning strategy; FSDP FULL_SHARD is a no-op on 1 GPU.
+
+## 7. Metrics table (to be filled from desktop runs)
+| Model | Avg L2 (m) ↓ | Avg Collision (%) ↓ | Notes |
+|---|---|---|---|
+| Paper (reported) | _tbd_ | _tbd_ | from arXiv:2506.13757 |
+| Released ckpt `Zewei-Zhou/AutoVLA` (our harness) | _tbd_ | _tbd_ | §5.8 sanity |
+| Our LoRA SFT (mini) | _tbd_ | _tbd_ | smoke/first pass |
+| Our LoRA SFT (trainval) | _tbd_ | _tbd_ | scaled-up |
 
 ---
 

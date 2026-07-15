@@ -1,0 +1,72 @@
+
+name: qwen2.5-vl-3B-nusc-sft-lora
+description: >
+  AutoVLA (Qwen2.5-VL-3B) LoRA SFT on nuScenes, action-only (no CoT).
+  Single-GPU recipe for a 32 GB card (e.g. RTX 5090). Base weights frozen; LoRA on
+  attention projections + trainable token embedding / lm_head so the 2048 new
+  <action_*> tokens can be learned. Produces checkpoints that, once merged
+  (tools/merge_lora.py), are loadable by tools/eval/nusc_eval.py with the existing
+  config/eval/qwen2.5-vl-3B-nusc-sft-eval.yaml.
+
+# model
+model:
+  use_cot: false
+  pretrained_model_path: ./Qwen2.5-VL-3B-Instruct
+  train_vision_backbone: false
+  train_lm_backbone: false          # LoRA does the LM adaptation; base LM stays frozen
+  codebook_cache_path: "codebook_cache/agent_vocab.pkl"
+
+  # LoRA (single-GPU adaptation of the paper's full-parameter SFT).
+  # modules_to_save is intentionally omitted: tools/run_sft_lora.py auto-derives it
+  # from the model's tie_word_embeddings flag so the new action-token rows stay
+  # trainable without accidentally untying embed_tokens/lm_head.
+  lora:
+    use: true
+    task_type: CAUSAL_LM
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    bias: "none"
+
+  trajectory: # future trajectory parameters
+    num_poses: 10
+    interval_length: 0.5
+    time_horizon: 5.0
+  tokens: # action token parameters, depends on the pretrained large model
+    action_start_id: 151665
+    ignore_index: -100
+    assistant_id: [151644, 77091]
+  video:
+    min_pixels: 109760
+    max_pixels: 109760
+
+# training
+training:
+  batch_size: 1
+  learning_rate: 1.0e-4            # LoRA typically wants a higher LR than full-param 2e-5
+  epochs: 5
+  num_workers: 4
+  weight_decay: 0.01
+  lr_warmup_step: 500
+  lr_step_frequency: 2000
+  lr_step_gamma: 0.98
+  train_sample_size: null          # null = full split; override on CLI for a smoke test
+  accumulate_grad_batches: 4
+
+data:
+  train:
+    json_dataset_path: ./dataset/nuscenes/nuscenes_train
+    sensor_data_path: null         # nuScenes JSONs store ABSOLUTE image paths -> use as-is
+  val:
+    json_dataset_path: ./dataset/nuscenes/nuscenes_val
+    sensor_data_path: null
+
+inference:
+  batch_size: 1
+  num_workers: 2
+  sample:
+    max_length: 2048
+    temperature: 0.01
+    top_k: 0
+    top_p: 1.0

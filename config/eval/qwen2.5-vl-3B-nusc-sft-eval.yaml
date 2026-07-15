@@ -37,11 +37,11 @@ training:
 data:
   train:
       json_dataset_path: ./dataset/nuscenes/nuscenes_train
-      sensor_data_path: ./dataset/nuscenes
+      sensor_data_path: null   # nuScenes JSONs store the image paths from preprocessing; use as-is
 
   val:
       json_dataset_path: ./dataset/nuscenes/nuscenes_val
-      sensor_data_path: ./dataset/nuscenes
+      sensor_data_path: null   # nuScenes JSONs store the image paths from preprocessing; use as-is
 
 
 inference:
